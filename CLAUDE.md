@@ -320,6 +320,8 @@ mvn -f framework/pom.xml clean verify -Prelease -Dgpg.skip=true
 
 ## 7. 给 AI Agent 的额外提示
 
+- **开工前先读 `docs/PROGRESS.md`**——它写「现在到哪了、下一步做什么」。
+  多仓拓扑下，"本地已完成但尚未推上 GitHub"是常态，光看远端仓库会得出错误结论
 - **改动前先读 `develop_plan.md` 对应章节**，本文件只写结论不写理由，理由在方案里
 - 遇到版本问题查 `VERSION_BASELINE.md`，里面记录了已核验的事实和已知的错误信息源
 - 本项目多处决策是**有意选择上一代技术**（Spring Boot 3.5 而非 4.x、Jackson 2 而非 3），
