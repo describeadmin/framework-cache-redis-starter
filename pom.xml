@@ -14,7 +14,8 @@
 
     代价是下面这些构建配置要自带一份。它们都是【硬约束】而非偏好，
     每一条对应 CLAUDE.md 里的一条规范，不要"精简"掉：
-      - toolchains + release=17   构建用 JDK 21，产物必须能跑在 Java 17 上
+      - release=17                产物必须能跑在 Java 17 上（构建用哪个 JDK 不作要求，见下）
+      - enforcer 的 requireJavaVersion  唯一的构建前提：JDK >= 17
       - surefire 的 UTF-8         中文 Windows 上默认 GBK，断言里的中文会对不上（CLAUDE.md 3.6）
       - enforcer 的两条 ban       JDBC 驱动、Jackson 3
     唯独【不带】framework 仓里的 enforce-core-thin —— 本模块的职责就是引入 Redis。
@@ -56,8 +57,21 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-    <java.build.version>21</java.build.version>
+    <!--
+      本仓库【不对构建 JDK 做版本要求】，唯一前提是 JDK >= 17（由 enforcer 的
+      requireJavaVersion 兜底）。你用 17 / 21 / 25 构建都可以。
+
+      能这么放开的原因是下面这一行：release=17 约束的是【产物】——编译器一律按
+      Java 17 的 API 与字节码产出，构建 JDK 是 17 还是 25，产出的 class 文件
+      major version 都是 61。所以再去钉构建 JDK，换不来任何产物上的差别，
+      只会把手上没装那个版本的贡献者挡在门外。
+
+      ⚠️ release=17 这一行本身【不能删】。删了字节码就跟着构建 JDK 走，
+      Java 17 的使用方会在启动时拿到 UnsupportedClassVersionError ——
+      "使用方只要 17+ 即可"这句承诺，正是靠它兑现的。CI 有一步专门断言 major version 为 61。
+    -->
     <maven.compiler.release>17</maven.compiler.release>
+    <enforcer.java.version>[17,)</enforcer.java.version>
 
     <!--
       ⚠️ 本插件构建所针对的框架版本。
@@ -79,7 +93,6 @@
     <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
     <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
     <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
-    <maven-toolchains-plugin.version>3.3.0</maven-toolchains-plugin.version>
     <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
     <central-publishing-plugin.version>0.11.0</central-publishing-plugin.version>
   </properties>
@@ -180,26 +193,6 @@
     </pluginManagement>
 
     <plugins>
-      <!--
-        Toolchains：显式声明构建所需的 JDK，Maven 自行从 ~/.m2/toolchains.xml 中查找。
-        这样构建结果与 PATH 上是哪个 java 无关。首次配置见 docs 仓的 scripts/toolchains.xml.sample。
-      -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-toolchains-plugin</artifactId>
-        <version>${maven-toolchains-plugin.version}</version>
-        <executions>
-          <execution>
-            <goals>
-              <goal>select-jdk-toolchain</goal>
-            </goals>
-          </execution>
-        </executions>
-        <configuration>
-          <version>${java.build.version}</version>
-        </configuration>
-      </plugin>
-
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
@@ -240,6 +233,22 @@
                 <requireMavenVersion>
                   <version>[3.9.0,)</version>
                 </requireMavenVersion>
+                <!--
+                  构建的唯一前提：跑 Maven 的那个 JDK >= 17。
+                  不再钉具体版本（原来是 toolchains + JDK 21）—— 有 release=17 在，
+                  17 / 21 / 25 构建出的产物完全一致，钉住只会平白挡住贡献者。
+
+                  17 这个下界不是可选的：spring-boot-maven-plugin 与 release=17 都要求
+                  Maven 进程自身跑在 17+。用 `mvn -v` 看 Java version 确认，
+                  不要用 `java -version` —— 后者看的是 PATH，与 Maven 用哪个 JDK 无关。
+                -->
+                <requireJavaVersion>
+                  <version>${enforcer.java.version}</version>
+                  <message>
+                    构建本插件需要 JDK 17 或更高版本（用 `mvn -v` 查看 Maven 实际使用的 JDK）。
+                    具体用 17 / 21 / 25 都可以，产物一律是 Java 17 字节码。
+                  </message>
+                </requireJavaVersion>
                 <!--
                   插件同样不得引入 JDBC 驱动 —— 拆仓后这条规则不会再从父 POM 继承过来，
                   必须自带一份。见 CLAUDE.md 3.4。

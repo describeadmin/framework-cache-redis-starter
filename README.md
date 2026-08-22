@@ -78,8 +78,11 @@ mvn clean test                              # 需要 Docker：测试用真实 Re
 mvn clean test -Ddescribeadmin.version=0.3.0  # 针对另一个框架版本跑，即 CI 矩阵做的事
 ```
 
-构建 JDK 由 Maven Toolchains 选定（JDK 21，产物 `release=17`），**与 `PATH` 上是哪个
-`java` 无关**。首次配置见 docs 仓的 `scripts/toolchains.xml.sample`。
+构建**不要求特定的 JDK 版本**，唯一前提是 **JDK >= 17**（由 enforcer 的 `requireJavaVersion`
+把关）。17 / 21 / 25 都可以，产物一律是 Java 17 字节码（`maven.compiler.release=17`）。
+
+用 `mvn -v` 看 Maven 实际使用的 JDK，**不要用 `java -version`**——后者看的是 `PATH`，
+与 Maven 用哪个 JDK 无关。
 
 测试用 Testcontainers 起真实 Redis，不用 mock：本模块的价值全在"与真实 Redis 的语义是否一致"——
 Lua 脚本的原子性、`PTTL` 的取值、`SCAN` 的游标行为，恰恰是 mock 掉之后就再也验证不到的东西。
