@@ -160,4 +160,34 @@ class RedisCacheProviderTest extends AbstractRedisTest {
         // Lua 脚本在 Redis 上单线程执行，INCRBY 与设置存活时间之间不会被插入其他命令
         assertThat(cache.get("hot", Long.class)).contains((long) threads * perThread);
     }
+
+    @Test
+    @DisplayName("按前缀枚举时返回逻辑 key，不带本实例的物理前缀")
+    void keysWithPrefixStripsPhysicalPrefix() {
+        cache.put("describeadmin:login:fail:alice", 1L, Duration.ofMinutes(1));
+        cache.put("describeadmin:login:fail:bob", 1L, Duration.ofMinutes(1));
+        cache.put("describeadmin:other:thing", 1L, Duration.ofMinutes(1));
+
+        assertThat(cache.keysWithPrefix("describeadmin:login:fail:"))
+                .containsExactlyInAnyOrder(
+                        "describeadmin:login:fail:alice", "describeadmin:login:fail:bob");
+        // Redis 里实际存的是带 "test:" 物理前缀的 key，调用方看到的必须是去掉它之后的逻辑 key，
+        // 否则同一个前缀在 InMemoryCacheProvider 和 RedisCacheProvider 下会得到不同形状的结果
+        assertThat(template.hasKey("test:describeadmin:login:fail:alice")).isTrue();
+    }
+
+    @Test
+    @DisplayName("没有匹配项时返回空集合")
+    void keysWithPrefixEmptyWhenNoMatch() {
+        assertThat(cache.keysWithPrefix("no-such-prefix:")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("已过期的 key 不出现在按前缀枚举的结果里")
+    void keysWithPrefixExcludesExpired() throws Exception {
+        cache.put("describeadmin:login:fail:alice", 1L, Duration.ofMillis(300));
+        Thread.sleep(600);
+
+        assertThat(cache.keysWithPrefix("describeadmin:login:fail:")).isEmpty();
+    }
 }

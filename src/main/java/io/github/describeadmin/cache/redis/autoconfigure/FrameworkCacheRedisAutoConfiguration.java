@@ -59,7 +59,9 @@ public class FrameworkCacheRedisAutoConfiguration {
      *
      * <p>用到框架新增的 SPI 时必须同步上调，否则装到旧框架上会在<b>运行期</b>
      * 抛 NoSuchMethodError，而不是在启动时被挡住。本插件用到了 0.2.0 引入的
-     * {@code TokenStore.listActive()} 与 {@code ActiveSession}。
+     * {@code TokenStore.listActive()}、{@code ActiveSession}，以及同样在 0.2.0 内新增的
+     * {@code TokenStore.issueWithRefresh()/refresh()/revokeRefreshToken()}（access/refresh
+     * 双令牌）与 {@code CacheProvider.keysWithPrefix()}（登录锁定可观测性）。
      */
     public static final String REQUIRED_FRAMEWORK_VERSION = "0.2.0";
 
@@ -118,7 +120,8 @@ public class FrameworkCacheRedisAutoConfiguration {
             // 也不自己抄一份默认值——两处默认值各说各话时，"改了没生效"是最难查的一类问题
             return new RedisTokenStore(redisTemplate,
                     objectMapper.getIfAvailable(ObjectMapper::new),
-                    properties.getKeyPrefix(), securityProperties.getTokenTtl());
+                    properties.getKeyPrefix(), securityProperties.getTokenTtl(),
+                    securityProperties.getRefreshToken().getTtl());
         }
     }
 }

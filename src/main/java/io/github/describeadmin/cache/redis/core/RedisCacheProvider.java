@@ -4,13 +4,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.describeadmin.cache.api.CacheProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 
 import java.time.Duration;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * {@link CacheProvider} 的 Redis 实现。
@@ -29,6 +33,9 @@ import java.util.Optional;
 public class RedisCacheProvider implements CacheProvider {
 
     private static final Logger log = LoggerFactory.getLogger(RedisCacheProvider.class);
+
+    /** keysWithPrefix 用 SCAN 的单批数量。只影响往返次数，不影响结果。 */
+    private static final int SCAN_BATCH = 256;
 
     /**
      * 自增并"仅在没有存活时间时才设置存活时间"。
@@ -107,6 +114,26 @@ public class RedisCacheProvider implements CacheProvider {
         Long value = redis.execute(INCREMENT_SCRIPT, List.of(fullKey(key)),
                 String.valueOf(delta), String.valueOf(ttlWhenCreated.toMillis()));
         return value == null ? 0L : value;
+    }
+
+    @Override
+    public Set<String> keysWithPrefix(String prefix) {
+        requireKey(prefix);
+        // 用 SCAN 而不是 KEYS：KEYS 会阻塞整个 Redis 实例，在共享 Redis 的部署里，
+        // 一次管理侧查询就能拖垮所有业务——与 RedisTokenStore#listActive 是同一条铁律，
+        // 不能因为这里是"缓存"而放松。
+        Set<String> result = new LinkedHashSet<>();
+        ScanOptions options = ScanOptions.scanOptions()
+                .match(fullKey(prefix) + "*")
+                .count(SCAN_BATCH)
+                .build();
+        try (Cursor<String> cursor = redis.scan(options)) {
+            while (cursor.hasNext()) {
+                // 剥离本实例自己的物理前缀，调用方看到的是与 InMemoryCacheProvider 一致的逻辑 key
+                result.add(cursor.next().substring(keyPrefix.length()));
+            }
+        }
+        return result;
     }
 
     private String fullKey(String key) {

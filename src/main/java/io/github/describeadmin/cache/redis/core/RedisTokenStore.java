@@ -2,6 +2,7 @@ package io.github.describeadmin.cache.redis.core;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.describeadmin.security.api.ActiveSession;
+import io.github.describeadmin.security.api.IssuedTokens;
 import io.github.describeadmin.security.api.LoginUser;
 import io.github.describeadmin.security.api.TokenStore;
 import org.slf4j.Logger;
@@ -28,10 +29,14 @@ import java.util.Set;
  * 令牌仍然是不透明的随机串，与内存实现同样是 256 位随机量——
  * 换存储不改变"令牌本身不携带信息"这一性质。
  *
- * <p><b>两组键</b>：
+ * <p><b>四组键</b>（后两组是 access/refresh 双令牌机制新增，与前两组结构完全对称）：
  * <ul>
- *   <li>{@code <prefix>session:<token>} —— 会话内容，由 Redis 的存活时间负责过期</li>
- *   <li>{@code <prefix>session-index:<userId>} —— 该用户的令牌集合，用于"强制下线"</li>
+ *   <li>{@code <prefix>session:<token>} —— access token 的会话内容，由 Redis 的存活时间负责过期</li>
+ *   <li>{@code <prefix>session-index:<userId>} —— 该用户的 access token 集合，用于"强制下线"</li>
+ *   <li>{@code <prefix>refresh:<token>} —— refresh token 对应的会话内容</li>
+ *   <li>{@code <prefix>refresh-index:<userId>} —— 该用户的 refresh token 集合，
+ *       {@link #revokeAllOf} 必须同时清掉这一组，否则改密码/禁用会被一个仍然有效的
+ *       refresh token 绕过（见 {@code TokenStore#revokeAllOf} 的 javadoc）</li>
  * </ul>
  * 索引是必需的：没有它，按用户吊销就只能全库扫描，而强制下线恰恰是要立刻生效的操作。
  * 索引键自身也设存活时间，避免用户再不登录后留下永久残留。
@@ -46,9 +51,14 @@ public class RedisTokenStore implements TokenStore {
 
     private static final String SESSION = "session:";
     private static final String INDEX = "session-index:";
+    private static final String REFRESH = "refresh:";
+    private static final String REFRESH_INDEX = "refresh-index:";
 
     /** SCAN 的单批数量。只影响往返次数，不影响结果。 */
     private static final int SCAN_BATCH = 256;
+
+    /** 未显式指定 refresh token 有效期时的默认值，与 FrameworkSecurityProperties.RefreshToken 的默认值一致。 */
+    private static final Duration DEFAULT_REFRESH_TTL = Duration.ofDays(7);
 
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
@@ -57,16 +67,26 @@ public class RedisTokenStore implements TokenStore {
     private final ObjectMapper objectMapper;
     private final String keyPrefix;
     private final Duration ttl;
+    private final Duration refreshTtl;
 
     public RedisTokenStore(StringRedisTemplate redis, ObjectMapper objectMapper,
                            String keyPrefix, Duration ttl) {
+        this(redis, objectMapper, keyPrefix, ttl, DEFAULT_REFRESH_TTL);
+    }
+
+    public RedisTokenStore(StringRedisTemplate redis, ObjectMapper objectMapper,
+                           String keyPrefix, Duration ttl, Duration refreshTtl) {
         if (ttl == null || ttl.isZero() || ttl.isNegative()) {
             throw new IllegalArgumentException("令牌有效期必须为正数，当前为: " + ttl);
+        }
+        if (refreshTtl == null || refreshTtl.isZero() || refreshTtl.isNegative()) {
+            throw new IllegalArgumentException("刷新令牌有效期必须为正数，当前为: " + refreshTtl);
         }
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.keyPrefix = keyPrefix == null ? "" : keyPrefix;
         this.ttl = ttl;
+        this.refreshTtl = refreshTtl;
     }
 
     @Override
@@ -74,9 +94,7 @@ public class RedisTokenStore implements TokenStore {
         if (user == null) {
             throw new IllegalArgumentException("不能为 null 用户签发令牌");
         }
-        byte[] raw = new byte[32];
-        RANDOM.nextBytes(raw);
-        String token = ENCODER.encodeToString(raw);
+        String token = newOpaqueToken();
 
         Instant now = Instant.now();
         StoredSession session = StoredSession.of(user, now, now.plus(ttl));
@@ -89,6 +107,60 @@ public class RedisTokenStore implements TokenStore {
             redis.expire(indexKey, ttl);
         }
         return token;
+    }
+
+    @Override
+    public IssuedTokens issueWithRefresh(LoginUser user) {
+        if (user == null) {
+            throw new IllegalArgumentException("不能为 null 用户签发令牌");
+        }
+        String accessToken = issue(user);
+        String refreshToken = newOpaqueToken();
+
+        Instant now = Instant.now();
+        StoredSession session = StoredSession.of(user, now, now.plus(refreshTtl));
+        redis.opsForValue().set(refreshKey(refreshToken), write(session), refreshTtl);
+
+        if (user.getUserId() != null) {
+            String indexKey = refreshIndexKey(user.getUserId());
+            redis.opsForSet().add(indexKey, refreshToken);
+            redis.expire(indexKey, refreshTtl);
+        }
+        return new IssuedTokens(accessToken, refreshToken);
+    }
+
+    @Override
+    public Optional<IssuedTokens> refresh(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            return Optional.empty();
+        }
+        String key = refreshKey(refreshToken);
+        String json = redis.opsForValue().get(key);
+        // 轮换：无论后续是否成功都先摘掉旧的一份——refresh token 只能使用一次，缩小泄露窗口
+        redis.delete(key);
+        Optional<StoredSession> session = read(json);
+        session.map(StoredSession::userId)
+                .ifPresent(userId -> redis.opsForSet().remove(refreshIndexKey(userId), refreshToken));
+        return session.map(s -> issueWithRefresh(s.toLoginUser()));
+    }
+
+    @Override
+    public void revokeRefreshToken(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            return;
+        }
+        String key = refreshKey(refreshToken);
+        String json = redis.opsForValue().get(key);
+        redis.delete(key);
+        read(json).map(StoredSession::userId)
+                .ifPresent(userId -> redis.opsForSet().remove(refreshIndexKey(userId), refreshToken));
+    }
+
+    /** 256 位随机量。令牌是不透明的，本身不携带任何信息，猜中概率可忽略；access/refresh 令牌共用同一套生成方式。 */
+    private static String newOpaqueToken() {
+        byte[] raw = new byte[32];
+        RANDOM.nextBytes(raw);
+        return ENCODER.encodeToString(raw);
     }
 
     @Override
@@ -122,13 +194,21 @@ public class RedisTokenStore implements TokenStore {
         if (userId == null) {
             return 0;
         }
-        String indexKey = indexKey(userId);
+        int accessRevoked = revokeAllInIndex(indexKey(userId), this::sessionKey);
+        // refresh token 必须同步吊销，否则"改密码/禁用立即失效"会被一个仍然有效的
+        // refresh token 绕过——见 TokenStore.revokeAllOf 的 javadoc。
+        revokeAllInIndex(refreshIndexKey(userId), this::refreshKey);
+        return accessRevoked;
+    }
+
+    /** 按索引集合批量删除对应的会话键，并清掉索引本身；返回实际删掉的会话键数。 */
+    private int revokeAllInIndex(String indexKey, java.util.function.Function<String, String> keyMapper) {
         Set<String> tokens = redis.opsForSet().members(indexKey);
         if (tokens == null || tokens.isEmpty()) {
             redis.delete(indexKey);
             return 0;
         }
-        List<String> keys = tokens.stream().map(this::sessionKey).toList();
+        List<String> keys = tokens.stream().map(keyMapper).toList();
         Long deleted = redis.delete(keys);
         redis.delete(indexKey);
         // 以实际删掉的键数为准：索引里可能残留已自然过期的令牌，
@@ -162,6 +242,14 @@ public class RedisTokenStore implements TokenStore {
 
     private String indexKey(Long userId) {
         return keyPrefix + INDEX + userId;
+    }
+
+    private String refreshKey(String token) {
+        return keyPrefix + REFRESH + token;
+    }
+
+    private String refreshIndexKey(Long userId) {
+        return keyPrefix + REFRESH_INDEX + userId;
     }
 
     private String write(StoredSession session) {
