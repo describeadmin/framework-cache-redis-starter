@@ -67,6 +67,10 @@ io.github.describeadmin.<模块>
 
 `api/` 包下的任何 public 签名变更都是 Breaking Change。
 
+**`util/` 不在兼容性承诺范围内**，因此它只放模块内部用的东西。
+真要给业务方用的工具必须放 `api/`——但在放进去之前先读 4.7，
+多数"工具类"根本不该进框架。
+
 ---
 
 ## 3. 数据库约定（强制）
@@ -293,6 +297,56 @@ public Result<Void> resetPassword(...) { ... }
 > 已安装，未装插件时它们只是普通联系方式。核心因此没有违反"不出现具体登录方式"的边界：
 > `mobile`/`email` 是数据字段，不是某个厂商或某种验证机制的名字。
 > 后续若出现这两个字段覆盖不了的身份属性需求，走框架版本升级新增，不在核心表里预先堆列。
+
+### 4.7 工具类：进核心还是根本不做
+
+4.6 的四条判据是给**能力**用的。工具类大多是零依赖纯函数，四条一条都不命中，
+照搬会得出"全都能进核心"的错误结论。工具类用这一条：
+
+> **只有"必须挂在框架装配点上才成立"的工具才进核心**——它要么改变框架已有行为
+> （Jackson 序列化、审计填充），要么固化一个框架已经替业务方做过的语义决定
+> （分页元信息的边界、树结构、脱敏口径）。
+> **纯粹是"少写几行 JDK 调用"的工具一律不做。**
+
+理由是成本结构不对称：这类工具进了 `api/` 就是 SemVer 承诺，**删不掉**，
+而收益只是省几行 `LocalDate.now().plusDays(7)`。是净负债。
+
+据此**明确不做**（这些结论已经论证过，不要再翻出来重提）：
+
+- `StringUtils` / `CollectionUtils` / `BeanUtils` / `JsonUtils`——Spring 自带前三个，
+  `Objects` / `String.isBlank()` 覆盖其余。框架再出一套的唯一效果是
+  "三个 StringUtils 该 import 哪个"
+- 传统 `DateUtils`（format / parse / 加减 / 取月初月末）——java.time 时代已无存在价值。
+  时间相关真正该做的三件是 4.8 的序列化格式、可注入的 `Clock`、以及把时区口径写进文档
+  （DB `DATETIME` → Java `LocalDateTime` → 前端按浏览器本地，链路上不出现
+  `Date`/`Timestamp`/`Instant` 就自洽），**没有一件是工具类**
+- **不引 Hutool**——~1.5MB 单体依赖、版本节奏与框架无关，且它大量工具做的正是
+  本文件明令禁止的事（各种 `Date` 转换）。业务方想用自己引
+
+### 4.8 JSON 序列化约定
+
+由 `framework-web-starter` 的 `FrameworkJsonModule` 统一承担，
+开关前缀 `describeadmin.web.json.*`。三条硬约定：
+
+| 约定 | 值 | 为什么 |
+|---|---|---|
+| `Long` / `long` → **字符串** | 默认开 | 雪花 ID 是 19 位，超过 JS `Number.MAX_SAFE_INTEGER`（16 位），前端 `JSON.parse` 会静默舍入末几位——**列表显示正常，点编辑/删除报「记录不存在」或改错行**。3.3 明确支持切雪花，框架就得保证切过去之后是对的 |
+| 时间输出 | `yyyy-MM-dd HH:mm:ss` / `yyyy-MM-dd` / `HH:mm:ss` | 与 codegen 生成的日期选择器 `value-format` 对齐 |
+| 时间输入 | **出严进宽**：`T` 与空格分隔都接受，秒与小数秒可省 | 不打断已经在发 ISO 的调用方 |
+
+两条容易踩的：
+
+1. **要保持数字形态的 `Long` 字段，用 `@JsonFormat(shape = JsonFormat.Shape.NUMBER)` 排除。**
+   框架自己在 `PageResult` 的 `total`/`current`/`size`/`pages` 上用了它——分页元信息
+   不可能接近 2^53，而 `el-pagination` 的 `:total` 要求数字。这是**唯一**的例外，
+   新增例外要有同等强度的理由。
+2. **绝不要自己声明 `@Bean ObjectMapper`。** 那会顶掉 Spring Boot 的全部默认配置，
+   并让业务方的 `spring.jackson.*` 全部失效。要改约定就加 `Module` Bean，
+   Boot 会自动收集，且注册在内置 `JavaTimeModule` 之后，天然覆盖。
+
+`BigDecimal` **刻意不转字符串**：金额按 2 位小数计，double 精确到 2^53 分
+（约 90 万亿元），远超实际业务范围；转成字符串反而让前端数字输入框与排序都变麻烦。
+确有超高精度需求的业务方自行在字段上加 `@JsonSerialize(using = ToStringSerializer.class)`。
 
 ---
 
