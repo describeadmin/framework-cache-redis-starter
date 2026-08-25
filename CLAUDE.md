@@ -348,6 +348,35 @@ public Result<Void> resetPassword(...) { ... }
 （约 90 万亿元），远超实际业务范围；转成字符串反而让前端数字输入框与排序都变麻烦。
 确有超高精度需求的业务方自行在字段上加 `@JsonSerialize(using = ToStringSerializer.class)`。
 
+### 4.9 ⚠️ Tailwind v4 覆盖不了 Element Plus 默认样式（层叠层陷阱）
+
+Tailwind v4（`@import 'tailwindcss'`）把自己生成的全部工具类放进
+`@layer theme, base, components, utilities`。Element Plus 的组件 CSS
+（`el-input.css`/`el-select.css` 等）是**未分层**的普通 CSS，且大量组件把
+宽度写死为 `width: 100%`（`.el-input`/`.el-select` 都有
+`--el-input-width: 100%` 这类声明）。
+
+按 CSS Cascade Layers 规范，**未分层规则无论特异度、无论加载顺序，一律压过
+任意已分层规则**。因此想用裸 Tailwind 类覆盖 Element Plus 默认样式的写法
+（比如 `class="w-48"` 想让 `ElInput` 变窄）永远不生效——不是类名写错，是
+写了也没用。
+
+**症状极具欺骗性**：类确实生成了、确实作用在了对的元素上，`display`/`gap`/
+`margin` 这类组件库自己没声明的属性能正常生效，唯独 `width`/`color` 这类
+组件库自己也声明了的属性怎么都覆盖不了，容易误判为"没被 Tailwind 扫描到"
+去改 `@source` 路径——那条路径本来就是对的。这与 3.6 节"不能仅凭现象猜原因"
+是同一类问题。
+
+**修复**：改用 Tailwind v4 的 `!` 重要性前缀（`!w-48` 而不是 `w-48`）。
+`!important` 不受层级顺序约束，可靠覆盖组件库的未分层样式。
+
+**核实方法**：组件库对应 CSS 文件里搜不到 `@layer` 包裹就是未分层；
+`tailwindcss` 包的 `index.css` 能看到自己是否把 utilities 放进了
+`@layer`（v4 默认如此）。
+
+首次踩坑记录：`views/oper-log/index.vue` 筛选栏，三个控件的宽度类从未生效，
+`flex-wrap` 逐个把它们挤到下一行，表现为"查询参数一个一行"。
+
 ---
 
 ## 5. 兼容性与发布
