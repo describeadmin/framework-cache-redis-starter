@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.describeadmin.security.api.ActiveSession;
 import io.github.describeadmin.security.api.IssuedTokens;
 import io.github.describeadmin.security.api.LoginUser;
+import io.github.describeadmin.security.api.SessionMeta;
 import io.github.describeadmin.security.api.TokenStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -91,13 +92,19 @@ public class RedisTokenStore implements TokenStore {
 
     @Override
     public String issue(LoginUser user) {
+        return issue(user, SessionMeta.EMPTY);
+    }
+
+    @Override
+    public String issue(LoginUser user, SessionMeta meta) {
         if (user == null) {
             throw new IllegalArgumentException("不能为 null 用户签发令牌");
         }
         String token = newOpaqueToken();
 
         Instant now = Instant.now();
-        StoredSession session = StoredSession.of(user, now, now.plus(ttl));
+        StoredSession session = StoredSession.of(user, now, now.plus(ttl),
+                meta == null ? SessionMeta.EMPTY : meta);
         redis.opsForValue().set(sessionKey(token), write(session), ttl);
 
         if (user.getUserId() != null) {
@@ -111,14 +118,21 @@ public class RedisTokenStore implements TokenStore {
 
     @Override
     public IssuedTokens issueWithRefresh(LoginUser user) {
+        return issueWithRefresh(user, SessionMeta.EMPTY);
+    }
+
+    @Override
+    public IssuedTokens issueWithRefresh(LoginUser user, SessionMeta meta) {
         if (user == null) {
             throw new IllegalArgumentException("不能为 null 用户签发令牌");
         }
-        String accessToken = issue(user);
+        SessionMeta safeMeta = meta == null ? SessionMeta.EMPTY : meta;
+        String accessToken = issue(user, safeMeta);
         String refreshToken = newOpaqueToken();
 
         Instant now = Instant.now();
-        StoredSession session = StoredSession.of(user, now, now.plus(refreshTtl));
+        // refresh 会话也存来源：刷新出的新会话是同一次登录的延续，见 refresh() 里的回传
+        StoredSession session = StoredSession.of(user, now, now.plus(refreshTtl), safeMeta);
         redis.opsForValue().set(refreshKey(refreshToken), write(session), refreshTtl);
 
         if (user.getUserId() != null) {
@@ -141,7 +155,7 @@ public class RedisTokenStore implements TokenStore {
         Optional<StoredSession> session = read(json);
         session.map(StoredSession::userId)
                 .ifPresent(userId -> redis.opsForSet().remove(refreshIndexKey(userId), refreshToken));
-        return session.map(s -> issueWithRefresh(s.toLoginUser()));
+        return session.map(s -> issueWithRefresh(s.toLoginUser(), new SessionMeta(s.ip(), s.device())));
     }
 
     @Override
@@ -283,13 +297,16 @@ public class RedisTokenStore implements TokenStore {
      */
     record StoredSession(Long userId, String username, String nickname, String authType,
                          Set<String> roles, Set<String> permissions,
-                         long issuedAtEpochMilli, long expiresAtEpochMilli) {
+                         long issuedAtEpochMilli, long expiresAtEpochMilli,
+                         String ip, String device) {
 
-        static StoredSession of(LoginUser user, Instant issuedAt, Instant expiresAt) {
+        static StoredSession of(LoginUser user, Instant issuedAt, Instant expiresAt, SessionMeta meta) {
+            SessionMeta safeMeta = meta == null ? SessionMeta.EMPTY : meta;
             return new StoredSession(user.getUserId(), user.getUsername(), user.getNickname(),
                     user.getAuthType(),
                     new LinkedHashSet<>(user.getRoles()), new LinkedHashSet<>(user.getPermissions()),
-                    issuedAt.toEpochMilli(), expiresAt.toEpochMilli());
+                    issuedAt.toEpochMilli(), expiresAt.toEpochMilli(),
+                    safeMeta.getIp(), safeMeta.getDevice());
         }
 
         LoginUser toLoginUser() {
@@ -299,7 +316,8 @@ public class RedisTokenStore implements TokenStore {
         ActiveSession toActiveSession() {
             return new ActiveSession(userId, username, nickname, authType,
                     Instant.ofEpochMilli(issuedAtEpochMilli),
-                    Instant.ofEpochMilli(expiresAtEpochMilli));
+                    Instant.ofEpochMilli(expiresAtEpochMilli),
+                    ip, device);
         }
     }
 }

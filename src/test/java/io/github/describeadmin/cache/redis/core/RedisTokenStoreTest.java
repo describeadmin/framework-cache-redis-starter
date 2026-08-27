@@ -4,6 +4,7 @@ import io.github.describeadmin.cache.redis.AbstractRedisTest;
 import io.github.describeadmin.security.api.ActiveSession;
 import io.github.describeadmin.security.api.IssuedTokens;
 import io.github.describeadmin.security.api.LoginUser;
+import io.github.describeadmin.security.api.SessionMeta;
 import io.github.describeadmin.security.api.TokenStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -145,6 +146,41 @@ class RedisTokenStoreTest extends AbstractRedisTest {
         Thread.sleep(600);
 
         assertThat(shortLived.listActive()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("登录来源 IP 与设备随会话存入 Redis，出现在在线列表里")
+    void sessionMetaRoundTrips() {
+        store.issue(user(1L, "admin", "超级管理员"),
+                new SessionMeta("203.0.113.7", "Chrome · Windows"));
+
+        ActiveSession s = store.listActive().get(0);
+        assertThat(s.getIp()).isEqualTo("203.0.113.7");
+        assertThat(s.getDevice()).isEqualTo("Chrome · Windows");
+    }
+
+    @Test
+    @DisplayName("不带来源信息签发时 IP/设备为 null，而不是报错")
+    void sessionMetaIsOptional() {
+        store.issue(user(1L, "admin", "超级管理员"));
+
+        ActiveSession s = store.listActive().get(0);
+        assertThat(s.getIp()).isNull();
+        assertThat(s.getDevice()).isNull();
+    }
+
+    @Test
+    @DisplayName("刷新令牌后，新会话仍带着原登录的 IP 与设备")
+    void refreshCarriesSessionMetaForward() {
+        IssuedTokens issued = store.issueWithRefresh(user(1L, "admin", "超级管理员"),
+                new SessionMeta("203.0.113.7", "Firefox · Linux"));
+
+        store.refresh(issued.getRefreshToken()).orElseThrow();
+
+        ActiveSession s = store.listActive().stream()
+                .filter(x -> "203.0.113.7".equals(x.getIp()))
+                .findFirst().orElseThrow();
+        assertThat(s.getDevice()).isEqualTo("Firefox · Linux");
     }
 
     // ------------------------------------------- 只有集中式实现才成立的两条
