@@ -27,14 +27,18 @@
 
 | 项 | 取值 | 说明 |
 |---|---|---|
-| 构建 JDK | **21** | 通过 Maven Toolchains 指定，不依赖 `PATH` |
+| 构建 JDK | **17+** | 任意 JDK ≥ 17 均可；由 enforcer 的 `requireJavaVersion` 兜底，不再用 toolchains 钉版本 |
 | 编译目标 | **`maven.compiler.release=17`** | 产物必须能在 Java 17 上运行 |
 | Spring Boot | **3.5.16** | 不要升级到 4.x，理由见方案 2.2.1 |
 | Jackson | **2.x**（`com.fasterxml.jackson.*`） | 不要使用 `tools.jackson.*`（那是 Jackson 3） |
 | Node / pnpm | node `^22.18 \|\| ^24.12`，pnpm `>=11` | |
 
-**不要用 `java -version` 判断构建 JDK**——本项目通过 toolchains 选择 JDK，
-`PATH` 上是什么与构建用什么无关。首次配置见 `scripts/toolchains.xml.sample`。
+**构建 JDK 只要求 ≥ 17**——`maven.compiler.release=17` 已保证产物在 Java 17 上运行，
+构建用 17 / 21 / 25 都行，`PATH` 上默认是哪个 `java` 无所谓（低于 17 会被 enforcer 拦下）。
+`framework` / 各插件 / `codegen` 均**不再用 `maven-toolchains-plugin`**——钉死具体版本只会让没配
+`~/.m2/toolchains.xml` 的人以 `Cannot find matching toolchain` 直接构建失败，比它要防的坑更劝退
+（见 develop_plan.md 2.2.2 与 VERSION_BASELINE 第八轮）。唯一仍配 toolchains 的是 `sample-app`，
+它刻意钉 JDK 17，用最低支持版本验证兼容承诺。
 
 **版本核查纪律**：任何依赖版本以 `https://repo1.maven.org/maven2/**/maven-metadata.xml`
 和 `https://registry.npmjs.org/<pkg>` 为准。
@@ -66,6 +70,10 @@ io.github.describeadmin.<模块>
 ```
 
 `api/` 包下的任何 public 签名变更都是 Breaking Change。
+
+**`util/` 不在兼容性承诺范围内**，因此它只放模块内部用的东西。
+真要给业务方用的工具必须放 `api/`——但在放进去之前先读 4.7，
+多数"工具类"根本不该进框架。
 
 ---
 
@@ -263,7 +271,7 @@ public Result<Void> resetPassword(...) { ... }
 **插件一律独立成仓**，不作为 `framework` 仓的 module —— 版本线与发布都不绑定框架。
 插件 POM **不继承 `framework-parent`**，改为 `import framework-bom`：那正是业务方消费框架的
 姿势，插件用同一套姿势才能提前暴露业务方会遇到的问题。代价是构建配置要自带一份
-（toolchains、`release=17`、surefire 编码、enforcer 的 JDBC 与 Jackson 两条），
+（`release=17`、surefire 编码、enforcer 的 `requireJavaVersion` + JDBC 驱动 + Jackson 3 三条），
 但**不带** `enforce-core-thin` —— 插件的职责就是引入那些重依赖。
 
 由此还有两条容易出错的：
@@ -294,6 +302,85 @@ public Result<Void> resetPassword(...) { ... }
 > `mobile`/`email` 是数据字段，不是某个厂商或某种验证机制的名字。
 > 后续若出现这两个字段覆盖不了的身份属性需求，走框架版本升级新增，不在核心表里预先堆列。
 
+### 4.7 工具类：进核心还是根本不做
+
+4.6 的四条判据是给**能力**用的。工具类大多是零依赖纯函数，四条一条都不命中，
+照搬会得出"全都能进核心"的错误结论。工具类用这一条：
+
+> **只有"必须挂在框架装配点上才成立"的工具才进核心**——它要么改变框架已有行为
+> （Jackson 序列化、审计填充），要么固化一个框架已经替业务方做过的语义决定
+> （分页元信息的边界、树结构、脱敏口径）。
+> **纯粹是"少写几行 JDK 调用"的工具一律不做。**
+
+理由是成本结构不对称：这类工具进了 `api/` 就是 SemVer 承诺，**删不掉**，
+而收益只是省几行 `LocalDate.now().plusDays(7)`。是净负债。
+
+据此**明确不做**（这些结论已经论证过，不要再翻出来重提）：
+
+- `StringUtils` / `CollectionUtils` / `BeanUtils` / `JsonUtils`——Spring 自带前三个，
+  `Objects` / `String.isBlank()` 覆盖其余。框架再出一套的唯一效果是
+  "三个 StringUtils 该 import 哪个"
+- 传统 `DateUtils`（format / parse / 加减 / 取月初月末）——java.time 时代已无存在价值。
+  时间相关真正该做的三件是 4.8 的序列化格式、可注入的 `Clock`、以及把时区口径写进文档
+  （DB `DATETIME` → Java `LocalDateTime` → 前端按浏览器本地，链路上不出现
+  `Date`/`Timestamp`/`Instant` 就自洽），**没有一件是工具类**
+- **不引 Hutool**——~1.5MB 单体依赖、版本节奏与框架无关，且它大量工具做的正是
+  本文件明令禁止的事（各种 `Date` 转换）。业务方想用自己引
+
+### 4.8 JSON 序列化约定
+
+由 `framework-web-starter` 的 `FrameworkJsonModule` 统一承担，
+开关前缀 `describeadmin.web.json.*`。三条硬约定：
+
+| 约定 | 值 | 为什么 |
+|---|---|---|
+| `Long` / `long` → **字符串** | 默认开 | 雪花 ID 是 19 位，超过 JS `Number.MAX_SAFE_INTEGER`（16 位），前端 `JSON.parse` 会静默舍入末几位——**列表显示正常，点编辑/删除报「记录不存在」或改错行**。3.3 明确支持切雪花，框架就得保证切过去之后是对的 |
+| 时间输出 | `yyyy-MM-dd HH:mm:ss` / `yyyy-MM-dd` / `HH:mm:ss` | 与 codegen 生成的日期选择器 `value-format` 对齐 |
+| 时间输入 | **出严进宽**：`T` 与空格分隔都接受，秒与小数秒可省 | 不打断已经在发 ISO 的调用方 |
+
+两条容易踩的：
+
+1. **要保持数字形态的 `Long` 字段，用 `@JsonFormat(shape = JsonFormat.Shape.NUMBER)` 排除。**
+   框架自己在 `PageResult` 的 `total`/`current`/`size`/`pages` 上用了它——分页元信息
+   不可能接近 2^53，而 `el-pagination` 的 `:total` 要求数字。这是**唯一**的例外，
+   新增例外要有同等强度的理由。
+2. **绝不要自己声明 `@Bean ObjectMapper`。** 那会顶掉 Spring Boot 的全部默认配置，
+   并让业务方的 `spring.jackson.*` 全部失效。要改约定就加 `Module` Bean，
+   Boot 会自动收集，且注册在内置 `JavaTimeModule` 之后，天然覆盖。
+
+`BigDecimal` **刻意不转字符串**：金额按 2 位小数计，double 精确到 2^53 分
+（约 90 万亿元），远超实际业务范围；转成字符串反而让前端数字输入框与排序都变麻烦。
+确有超高精度需求的业务方自行在字段上加 `@JsonSerialize(using = ToStringSerializer.class)`。
+
+### 4.9 ⚠️ Tailwind v4 覆盖不了 Element Plus 默认样式（层叠层陷阱）
+
+Tailwind v4（`@import 'tailwindcss'`）把自己生成的全部工具类放进
+`@layer theme, base, components, utilities`。Element Plus 的组件 CSS
+（`el-input.css`/`el-select.css` 等）是**未分层**的普通 CSS，且大量组件把
+宽度写死为 `width: 100%`（`.el-input`/`.el-select` 都有
+`--el-input-width: 100%` 这类声明）。
+
+按 CSS Cascade Layers 规范，**未分层规则无论特异度、无论加载顺序，一律压过
+任意已分层规则**。因此想用裸 Tailwind 类覆盖 Element Plus 默认样式的写法
+（比如 `class="w-48"` 想让 `ElInput` 变窄）永远不生效——不是类名写错，是
+写了也没用。
+
+**症状极具欺骗性**：类确实生成了、确实作用在了对的元素上，`display`/`gap`/
+`margin` 这类组件库自己没声明的属性能正常生效，唯独 `width`/`color` 这类
+组件库自己也声明了的属性怎么都覆盖不了，容易误判为"没被 Tailwind 扫描到"
+去改 `@source` 路径——那条路径本来就是对的。这与 3.6 节"不能仅凭现象猜原因"
+是同一类问题。
+
+**修复**：改用 Tailwind v4 的 `!` 重要性前缀（`!w-48` 而不是 `w-48`）。
+`!important` 不受层级顺序约束，可靠覆盖组件库的未分层样式。
+
+**核实方法**：组件库对应 CSS 文件里搜不到 `@layer` 包裹就是未分层；
+`tailwindcss` 包的 `index.css` 能看到自己是否把 utilities 放进了
+`@layer`（v4 默认如此）。
+
+首次踩坑记录：`views/oper-log/index.vue` 筛选栏，三个控件的宽度类从未生效，
+`flex-wrap` 逐个把它们挤到下一行，表现为"查询参数一个一行"。
+
 ---
 
 ## 5. 兼容性与发布
@@ -311,7 +398,7 @@ public Result<Void> resetPassword(...) { ... }
 # 拉取全部仓库到工作区
 ./scripts/clone-all.sh
 
-# 构建（依赖 toolchains，与 PATH 上的 java 无关）
+# 构建（任意 JDK ≥ 17 即可，无需 toolchains）
 mvn -f framework/pom.xml clean install
 
 # 跳过 GPG 签名的本地安装

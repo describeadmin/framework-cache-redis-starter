@@ -10,11 +10,12 @@
 > **本插件的版本线与框架独立**。插件发 1.3.0 完全可能仍然只要求框架 1.0.0，
 > 因此每个版本都必须写明适配的框架版本，见下方各条目的「框架要求」。
 
-## 0.2.0-SNAPSHOT (开发中)
+## 0.2.0 (2026-08-31)
 
 describeadmin 的第一个可选插件，也是"能力可插拔"这条设计的第一个真实证据。
 
-**框架要求：0.2.0 及以上**（用到 0.2.0 引入的 `TokenStore.listActive()` 与 `ActiveSession`）
+**框架要求：0.2.0 及以上**（用到 0.2.0 引入的 `TokenStore.listActive()`、`ActiveSession`
+与 `SessionMeta`）
 
 ### Breaking Changes
 
@@ -36,6 +37,10 @@ describeadmin 的第一个可选插件，也是"能力可插拔"这条设计的�
   两步之间崩溃会留下**永不过期**的计数键，对登录失败计数就意味着账号被永久锁定。
 - 在线会话枚举用 `SCAN` 而非 `KEYS`——后者会阻塞整个 Redis 实例，
   在共享 Redis 的部署里一次管理员点击就能拖垮所有业务。
+- 跟进框架的登录来源信息：`StoredSession` 增加 `ip` / `device` 两个扁平字段，
+  `issue` / `issueWithRefresh` 的 `SessionMeta` 重载把它们写进会话，
+  `listActive()` 带出来，刷新令牌时随会话延续。旧版本写入的会话 JSON 缺这两个字段，
+  反序列化为 `null`，不影响解析。
 - 值一律以 JSON 存储，不用 JDK 序列化、不开 Jackson 默认类型信息
   （后者是已知的反序列化攻击入口，而缓存内容并不总是可信）。
 - 启动期自检框架版本（`FrameworkVersion.requireCompatible`）：装到比

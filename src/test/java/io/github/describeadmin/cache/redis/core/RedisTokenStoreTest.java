@@ -2,7 +2,9 @@ package io.github.describeadmin.cache.redis.core;
 
 import io.github.describeadmin.cache.redis.AbstractRedisTest;
 import io.github.describeadmin.security.api.ActiveSession;
+import io.github.describeadmin.security.api.IssuedTokens;
 import io.github.describeadmin.security.api.LoginUser;
+import io.github.describeadmin.security.api.SessionMeta;
 import io.github.describeadmin.security.api.TokenStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -10,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.Duration;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -145,6 +148,41 @@ class RedisTokenStoreTest extends AbstractRedisTest {
         assertThat(shortLived.listActive()).isEmpty();
     }
 
+    @Test
+    @DisplayName("登录来源 IP 与设备随会话存入 Redis，出现在在线列表里")
+    void sessionMetaRoundTrips() {
+        store.issue(user(1L, "admin", "超级管理员"),
+                new SessionMeta("203.0.113.7", "Chrome · Windows"));
+
+        ActiveSession s = store.listActive().get(0);
+        assertThat(s.getIp()).isEqualTo("203.0.113.7");
+        assertThat(s.getDevice()).isEqualTo("Chrome · Windows");
+    }
+
+    @Test
+    @DisplayName("不带来源信息签发时 IP/设备为 null，而不是报错")
+    void sessionMetaIsOptional() {
+        store.issue(user(1L, "admin", "超级管理员"));
+
+        ActiveSession s = store.listActive().get(0);
+        assertThat(s.getIp()).isNull();
+        assertThat(s.getDevice()).isNull();
+    }
+
+    @Test
+    @DisplayName("刷新令牌后，新会话仍带着原登录的 IP 与设备")
+    void refreshCarriesSessionMetaForward() {
+        IssuedTokens issued = store.issueWithRefresh(user(1L, "admin", "超级管理员"),
+                new SessionMeta("203.0.113.7", "Firefox · Linux"));
+
+        store.refresh(issued.getRefreshToken()).orElseThrow();
+
+        ActiveSession s = store.listActive().stream()
+                .filter(x -> "203.0.113.7".equals(x.getIp()))
+                .findFirst().orElseThrow();
+        assertThat(s.getDevice()).isEqualTo("Firefox · Linux");
+    }
+
     // ------------------------------------------- 只有集中式实现才成立的两条
 
     @Test
@@ -187,5 +225,96 @@ class RedisTokenStoreTest extends AbstractRedisTest {
         // 共用一个 Redis 实例时，A 应用的强制下线不该波及 B 应用
         assertThat(otherApp.revokeAllOf(1L)).isZero();
         assertThat(store.resolve(token)).isNotEmpty();
+    }
+
+    // ------------------------------------------------------- 刷新令牌（与内存实现一一对应）
+
+    @Test
+    @DisplayName("签发的一对令牌都能独立解析")
+    void issuedPairBothResolve() {
+        IssuedTokens tokens = store.issueWithRefresh(user(1L, "admin", "超级管理员"));
+
+        assertThat(tokens.getAccessToken()).isNotBlank();
+        assertThat(tokens.getRefreshToken()).isNotBlank();
+        assertThat(store.resolve(tokens.getAccessToken())).isPresent();
+    }
+
+    @Test
+    @DisplayName("刷新成功后旧 refresh token 立即失效（轮换）")
+    void refreshRotatesOldRefreshToken() {
+        IssuedTokens first = store.issueWithRefresh(user(1L, "admin", "超级管理员"));
+
+        Optional<IssuedTokens> second = store.refresh(first.getRefreshToken());
+
+        assertThat(second).isPresent();
+        assertThat(second.get().getRefreshToken()).isNotEqualTo(first.getRefreshToken());
+        assertThat(store.refresh(first.getRefreshToken())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("刷新后新 access token 能正确解析出原用户，中文昵称不丢")
+    void refreshedAccessTokenResolvesToSameUser() {
+        IssuedTokens first = store.issueWithRefresh(user(1L, "admin", "超级管理员"));
+
+        IssuedTokens second = store.refresh(first.getRefreshToken()).orElseThrow();
+
+        assertThat(store.resolve(second.getAccessToken()))
+                .isPresent()
+                .get()
+                .extracting(LoginUser::getNickname)
+                .isEqualTo("超级管理员");
+    }
+
+    @Test
+    @DisplayName("不存在的 refresh token 返回空")
+    void refreshWithUnknownTokenReturnsEmpty() {
+        assertThat(store.refresh("not-a-real-token")).isEmpty();
+        assertThat(store.refresh(null)).isEmpty();
+        assertThat(store.refresh("")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("已过期的 refresh token 返回空")
+    void refreshWithExpiredTokenReturnsEmpty() throws Exception {
+        TokenStore shortLived = new RedisTokenStore(template, objectMapper(), "test:",
+                Duration.ofMinutes(30), Duration.ofMillis(300));
+        IssuedTokens tokens = shortLived.issueWithRefresh(user(1L, "admin", "超级管理员"));
+
+        Thread.sleep(600);
+
+        assertThat(shortLived.refresh(tokens.getRefreshToken())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("revokeAllOf 必须同时吊销 access 与 refresh 令牌——否则改密码/禁用立即失效会被绕过")
+    void revokeAllOfRevokesBothAccessAndRefresh() {
+        IssuedTokens tokens = store.issueWithRefresh(user(1L, "admin", "超级管理员"));
+
+        store.revokeAllOf(1L);
+
+        assertThat(store.resolve(tokens.getAccessToken())).isEmpty();
+        assertThat(store.refresh(tokens.getRefreshToken())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("revokeRefreshToken 只吊销 refresh token，不影响同一用户的 access token")
+    void revokeRefreshTokenOnlyAffectsRefreshToken() {
+        IssuedTokens tokens = store.issueWithRefresh(user(1L, "admin", "超级管理员"));
+
+        store.revokeRefreshToken(tokens.getRefreshToken());
+
+        assertThat(store.resolve(tokens.getAccessToken())).isPresent();
+        assertThat(store.refresh(tokens.getRefreshToken())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("刷新令牌在另一个实例上同样可用——多实例共享是引入本插件的全部理由")
+    void refreshTokenIsVisibleToAnotherInstance() {
+        IssuedTokens tokens = store.issueWithRefresh(user(1L, "admin", "超级管理员"));
+
+        TokenStore anotherInstance = new RedisTokenStore(newTemplate(), objectMapper(),
+                "test:", Duration.ofMinutes(30));
+
+        assertThat(anotherInstance.refresh(tokens.getRefreshToken())).isNotEmpty();
     }
 }
