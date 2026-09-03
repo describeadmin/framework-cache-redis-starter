@@ -23,7 +23,7 @@
 
   <groupId>io.github.describeadmin</groupId>
   <artifactId>framework-cache-redis-starter</artifactId>
-  <version>0.2.0</version>
+  <version>0.2.1</version>
   <packaging>jar</packaging>
 
   <name>describeadmin :: framework-cache-redis-starter</name>

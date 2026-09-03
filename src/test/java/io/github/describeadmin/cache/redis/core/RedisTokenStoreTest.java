@@ -1,6 +1,7 @@
 package io.github.describeadmin.cache.redis.core;
 
 import io.github.describeadmin.cache.redis.AbstractRedisTest;
+import io.github.describeadmin.common.api.DataScopeType;
 import io.github.describeadmin.security.api.ActiveSession;
 import io.github.describeadmin.security.api.IssuedTokens;
 import io.github.describeadmin.security.api.LoginUser;
@@ -46,6 +47,14 @@ class RedisTokenStoreTest extends AbstractRedisTest {
                 Set.of("ADMIN"), Set.of("system:user:list"));
     }
 
+    /** 带完整数据权限字段的用户，用于验证这些字段能穿过一次 Redis 往返。 */
+    private static LoginUser scopedUser() {
+        return new LoginUser(7L, "dept_manager", "部门主管", "password",
+                Set.of("DEPT_MANAGER"), Set.of("system:user:list"),
+                100L, DataScopeType.DEPT_AND_CHILD, Set.of(200L, 300L),
+                "/workbench", true);
+    }
+
     // ---------------------------------------------------- 与内存实现一致的契约
 
     @Test
@@ -59,6 +68,50 @@ class RedisTokenStoreTest extends AbstractRedisTest {
         assertThat(resolved.getNickname()).isEqualTo("超级管理员");
         assertThat(resolved.getRoles()).containsExactly("ADMIN");
         assertThat(resolved.getPermissions()).containsExactly("system:user:list");
+    }
+
+    @Test
+    @DisplayName("数据权限字段（dataScope/deptId/customDeptIds）与强制改密标记往返不丢")
+    void dataScopeFieldsRoundTrip() {
+        String token = store.issue(scopedUser());
+
+        LoginUser resolved = store.resolve(token).orElseThrow();
+        // 少存任意一个字段，解析回来都会因 LoginUser 构造器默认值而静默变成
+        // dataScope=ALL / deptId=null —— 数据权限直接失效，且没有任何报错
+        assertThat(resolved.getDataScope()).isEqualTo(DataScopeType.DEPT_AND_CHILD);
+        assertThat(resolved.getDeptId()).isEqualTo(100L);
+        assertThat(resolved.getCustomDeptIds()).containsExactlyInAnyOrder(200L, 300L);
+        assertThat(resolved.getHomePath()).isEqualTo("/workbench");
+        assertThat(resolved.isPwdResetRequired()).isTrue();
+    }
+
+    @Test
+    @DisplayName("刷新令牌后，新 access token 仍带着完整的数据权限字段")
+    void refreshCarriesDataScopeForward() {
+        IssuedTokens issued = store.issueWithRefresh(scopedUser());
+
+        IssuedTokens rotated = store.refresh(issued.getRefreshToken()).orElseThrow();
+
+        LoginUser resolved = store.resolve(rotated.getAccessToken()).orElseThrow();
+        assertThat(resolved.getDataScope()).isEqualTo(DataScopeType.DEPT_AND_CHILD);
+        assertThat(resolved.getDeptId()).isEqualTo(100L);
+        assertThat(resolved.getCustomDeptIds()).containsExactlyInAnyOrder(200L, 300L);
+    }
+
+    @Test
+    @DisplayName("0.2.1 之前的旧格式会话（缺数据权限字段）按未登录处理，绝不静默放行为 ALL")
+    void legacySessionWithoutDataScopeIsRejected() {
+        // 手工写入一份 0.2.0 时期格式的会话 JSON：没有 dataScope / deptId 等字段
+        long now = System.currentTimeMillis();
+        String legacyJson = "{\"userId\":1,\"username\":\"admin\",\"nickname\":\"超级管理员\","
+                + "\"authType\":\"password\",\"roles\":[\"ADMIN\"],\"permissions\":[\"system:user:list\"],"
+                + "\"issuedAtEpochMilli\":" + now + ",\"expiresAtEpochMilli\":" + (now + 600_000) + ","
+                + "\"ip\":null,\"device\":null}";
+        template.opsForValue().set("test:session:legacy-token", legacyJson, Duration.ofMinutes(30));
+
+        assertThat(store.resolve("legacy-token"))
+                .as("旧格式缺 dataScope，放行会被 LoginUser 落成默认值 ALL —— 必须按未登录处理")
+                .isEmpty();
     }
 
     @Test

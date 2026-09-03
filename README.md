@@ -20,6 +20,7 @@ describeadmin 的**可选插件**：把 `CacheProvider` 与 `TokenStore` 从内�
 | 插件版本 | 最低框架版本 | 说明 |
 |---|---|---|
 | 0.2.0 | **0.2.0** | 用到 0.2.0 引入的 `TokenStore.listActive()` 与 `ActiveSession` |
+| 0.2.1 | **0.2.0** | 修复 `RedisTokenStore` 丢失数据权限字段导致的越权，见 CHANGELOG |
 
 这张表不是文档承诺，是**可执行的**：
 
@@ -37,7 +38,7 @@ describeadmin 的**可选插件**：把 `CacheProvider` 与 `TokenStore` 从内�
 <dependency>
   <groupId>io.github.describeadmin</groupId>
   <artifactId>framework-cache-redis-starter</artifactId>
-  <version>0.2.0</version>
+  <version>0.2.1</version>
 </dependency>
 ```
 

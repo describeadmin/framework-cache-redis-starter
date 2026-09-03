@@ -10,7 +10,40 @@
 > **本插件的版本线与框架独立**。插件发 1.3.0 完全可能仍然只要求框架 1.0.0，
 > 因此每个版本都必须写明适配的框架版本，见下方各条目的「框架要求」。
 
-## 0.2.0 (2026-08-31)
+## 0.2.1 (2026-09-03)
+
+一个数据权限静默失效的安全修复。**建议所有已在生产使用 0.2.0 的项目尽快升级。**
+
+**框架要求：0.2.0 及以上**（不变——修复只在插件侧，0.2.0 的 `LoginUser` 早已带全所需字段）
+
+### Breaking Changes
+
+无。
+
+### New Features
+
+无。
+
+### Bug Fixes
+
+- **`RedisTokenStore` 丢失数据权限字段，导致数据权限静默失效（越权）。**
+  存进 Redis 的 `StoredSession` 只搬运了 `LoginUser` 11 个字段中的 6 个，漏掉
+  `dataScope` / `deptId` / `customDeptIds` / `homePath` / `pwdResetRequired`。
+  令牌是不透明令牌，每个请求都要从 Redis 反序列化重建 `LoginUser`，重建时走的是
+  6 参构造器 —— `dataScope` 因此落到默认值 `DataScopeType.ALL`，`deptId` 变 `null`。
+  **后果**：只要接入本插件，每个已认证用户的数据权限都被静默放大为"看得到全部数据"，
+  `DEPT` / `DEPT_AND_CHILD` / `CUSTOM` 三档全部失效；`pwdResetRequired` 丢失还会让
+  管理员重置密码 / 密码过期后的强制改密被绕过。`refresh()` 换发的新令牌同样残缺。
+  框架自带的 `InMemoryTokenStore` 按引用持有 `LoginUser`，没有这个问题 ——
+  症状表现为"单机 / 本地正常，一上 Redis 数据权限就没了"。
+  修复：`StoredSession` 补齐全部字段，`toLoginUser()` 改用全参构造器。
+- 反序列化时若读到 0.2.1 之前的旧格式会话（缺 `dataScope` 字段），按"未登录"处理，
+  让用户重新登录换一份完整会话，而不是放行后被默认值补成 `ALL`。
+  **升级后会观察到一次性的集中重新登录**，属预期行为。
+
+### 仓库
+
+- 无拓扑变更。
 
 describeadmin 的第一个可选插件，也是"能力可插拔"这条设计的第一个真实证据。
 

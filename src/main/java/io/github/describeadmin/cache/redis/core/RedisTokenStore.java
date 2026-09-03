@@ -1,6 +1,7 @@
 package io.github.describeadmin.cache.redis.core;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.describeadmin.common.api.DataScopeType;
 import io.github.describeadmin.security.api.ActiveSession;
 import io.github.describeadmin.security.api.IssuedTokens;
 import io.github.describeadmin.security.api.LoginUser;
@@ -279,7 +280,16 @@ public class RedisTokenStore implements TokenStore {
             return Optional.empty();
         }
         try {
-            return Optional.ofNullable(objectMapper.readValue(json, StoredSession.class));
+            StoredSession session = objectMapper.readValue(json, StoredSession.class);
+            if (session != null && session.dataScope() == null) {
+                // 0.2.1 之前写入的会话不带 dataScope/deptId/customDeptIds 等数据权限字段，
+                // 反序列化后它们为 null。若在此放行，toLoginUser() 会把 dataScope 落到
+                // 默认值 ALL —— 等于把每个存量会话静默提权成"看得到全部数据"。
+                // 按"未登录"处理、让用户重新登录换一份完整会话，是这里唯一安全的选择。
+                log.warn("会话为 0.2.1 之前的旧格式（缺数据权限字段），按未登录处理以避免数据权限被静默放大");
+                return Optional.empty();
+            }
+            return Optional.ofNullable(session);
         } catch (Exception e) {
             // 升级后存储结构变化时会走到这里。按"未登录"处理让用户重新登录一次，
             // 比抛异常把所有请求打挂要好
@@ -294,9 +304,16 @@ public class RedisTokenStore implements TokenStore {
      * <p>刻意不直接序列化 {@link LoginUser}：那样会把 {@code api} 包里的类
      * 与一段持久化格式绑死，之后 {@code LoginUser} 的任何字段调整都要考虑
      * "线上 Redis 里还存着旧格式"。这里的扁平结构由插件自己拥有，可以独立演进。
+     *
+     * <p><b>但"扁平结构由自己拥有"不等于"可以只存一部分字段"</b>——{@link #of} 与
+     * {@link #toLoginUser()} 必须覆盖 {@code LoginUser} 的<b>全部</b>字段。少存一个
+     * {@code dataScope}/{@code deptId}，解析回来的用户就会因为构造器默认值而
+     * 静默拿到 {@code DataScopeType.ALL}，数据权限形同虚设（0.2.1 修复）。
      */
     record StoredSession(Long userId, String username, String nickname, String authType,
                          Set<String> roles, Set<String> permissions,
+                         Long deptId, DataScopeType dataScope, Set<Long> customDeptIds,
+                         String homePath, boolean pwdResetRequired,
                          long issuedAtEpochMilli, long expiresAtEpochMilli,
                          String ip, String device) {
 
@@ -305,12 +322,18 @@ public class RedisTokenStore implements TokenStore {
             return new StoredSession(user.getUserId(), user.getUsername(), user.getNickname(),
                     user.getAuthType(),
                     new LinkedHashSet<>(user.getRoles()), new LinkedHashSet<>(user.getPermissions()),
+                    user.getDeptId(), user.getDataScope(),
+                    new LinkedHashSet<>(user.getCustomDeptIds()),
+                    user.getHomePath(), user.isPwdResetRequired(),
                     issuedAt.toEpochMilli(), expiresAt.toEpochMilli(),
                     safeMeta.getIp(), safeMeta.getDevice());
         }
 
         LoginUser toLoginUser() {
-            return new LoginUser(userId, username, nickname, authType, roles, permissions);
+            // 必须走全参构造器：漏掉 deptId/dataScope/customDeptIds 会让数据权限静默失效
+            // （dataScope 落到默认值 ALL），漏掉 pwdResetRequired 会绕过强制改密。
+            return new LoginUser(userId, username, nickname, authType, roles, permissions,
+                    deptId, dataScope, customDeptIds, homePath, pwdResetRequired);
         }
 
         ActiveSession toActiveSession() {
