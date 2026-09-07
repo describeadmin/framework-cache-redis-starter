@@ -1,14 +1,16 @@
 # framework-cache-redis-starter
 
-describeadmin 的**可选插件**：把 `CacheProvider` 与 `TokenStore` 从内存实现切到 Redis。
+describeadmin 的**可选插件**：把 `CacheProvider`、`TokenStore` 与 `LockOperations`
+从内存实现切到 Redis。
 
-不引它，框架用内存实现，行为与从前完全一致。引了它，两条内存实现的硬伤消失：
+不引它，框架用内存实现，行为与从前完全一致。引了它，三条内存实现的硬伤消失：
 
 | | 内存实现（框架自带） | 本插件 |
 |---|---|---|
 | 应用重启 | **全员掉线** | 会话保持 |
 | 多实例部署 | **不可用**（令牌只在签发它的那个实例上认识） | 共享会话 |
 | 强制下线 | 只踢得掉本实例的会话 | 全实例立即生效 |
+| 分布式锁 | **不可用**（`@DistributedLock`/`UniqueGuard` 只在单 JVM 内互斥） | 跨实例互斥 |
 | 外部依赖 | 无 | Redis |
 
 框架核心与业务代码**一行都不用改**——这正是"能力可插拔"这条设计要证明的东西。
@@ -21,6 +23,7 @@ describeadmin 的**可选插件**：把 `CacheProvider` 与 `TokenStore` 从内�
 |---|---|---|
 | 0.2.0 | **0.2.0** | 用到 0.2.0 引入的 `TokenStore.listActive()` 与 `ActiveSession` |
 | 0.2.1 | **0.2.0** | 修复 `RedisTokenStore` 丢失数据权限字段导致的越权，见 CHANGELOG |
+| 0.2.2 | **0.2.2** | 新增 `RedisLockOperations`（`LockOperations` 的 Redis 实现），用到 0.2.2 引入的锁 SPI |
 
 这张表不是文档承诺，是**可执行的**：
 
@@ -38,7 +41,7 @@ describeadmin 的**可选插件**：把 `CacheProvider` 与 `TokenStore` 从内�
 <dependency>
   <groupId>io.github.describeadmin</groupId>
   <artifactId>framework-cache-redis-starter</artifactId>
-  <version>0.2.1</version>
+  <version>0.2.2</version>
 </dependency>
 ```
 
@@ -65,18 +68,24 @@ describeadmin:
 令牌有效期取 `describeadmin.security.token-ttl`，插件不另立配置项——
 两处配置各说各话时，"改了没生效"是最难查的一类问题。
 
+锁键前缀同理取框架的 `describeadmin.lock.key-prefix`（默认 `describeadmin:lock:`），
+不用本插件的 `key-prefix`：内存/Redis 两个锁实现必须在同一配置下产出完全相同的
+键名，替换实现才不改变锁语义。多应用共用一个 Redis 时用锁前缀区分彼此。
+
 > ⚠️ 引入本插件即意味着 **Redis 必须真实存在**。Spring Boot 无条件注册
 > `StringRedisTemplate`（默认指向 `localhost:6379`）且惰性连接，
 > 所以"没配连接信息"不会让插件退让，只会在第一次真正用到时才失败。
+> 锁的操作在存储故障时 fail-close（直接报错拒绝执行，而不是放行失去并发保护），
+> Redis 整体不可用时业务方的加锁请求会失败——这是刻意的。
 
 ## 开发
 
 ```bash
-# 框架尚未发布 0.2.0 时，先从框架仓装一份到本地仓库
+# 框架尚未发布 0.2.2 时，先从框架仓装一份到本地仓库
 mvn -f ../framework/pom.xml clean install -DskipTests
 
-mvn clean test                              # 需要 Docker：测试用真实 Redis
-mvn clean test -Ddescribeadmin.version=0.3.0  # 针对另一个框架版本跑，即 CI 矩阵做的事
+mvn clean test                                # 需要 Docker：测试用真实 Redis
+mvn clean test -Ddescribeadmin.version=0.2.2  # 指定框架版本跑，即 CI 矩阵做的事
 ```
 
 构建**不要求特定的 JDK 版本**，唯一前提是 **JDK >= 17**（由 enforcer 的 `requireJavaVersion`

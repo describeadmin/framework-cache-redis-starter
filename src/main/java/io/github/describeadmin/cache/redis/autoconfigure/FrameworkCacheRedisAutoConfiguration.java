@@ -2,12 +2,17 @@ package io.github.describeadmin.cache.redis.autoconfigure;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.describeadmin.cache.api.CacheProvider;
+import io.github.describeadmin.cache.api.LockOperations;
 import io.github.describeadmin.cache.autoconfigure.FrameworkCacheAutoConfiguration;
+import io.github.describeadmin.cache.autoconfigure.FrameworkLockProperties;
 import io.github.describeadmin.cache.redis.core.RedisCacheProvider;
+import io.github.describeadmin.cache.redis.core.RedisLockOperations;
 import io.github.describeadmin.cache.redis.core.RedisTokenStore;
 import io.github.describeadmin.common.api.FrameworkVersion;
 import io.github.describeadmin.security.api.TokenStore;
 import io.github.describeadmin.security.autoconfigure.FrameworkSecurityProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -50,6 +55,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 @EnableConfigurationProperties(FrameworkCacheRedisProperties.class)
 public class FrameworkCacheRedisAutoConfiguration {
 
+    private static final Logger log = LoggerFactory.getLogger(FrameworkCacheRedisAutoConfiguration.class);
+
     /**
      * 本插件要求的最低框架版本。
      *
@@ -61,9 +68,10 @@ public class FrameworkCacheRedisAutoConfiguration {
      * 抛 NoSuchMethodError，而不是在启动时被挡住。本插件用到了 0.2.0 引入的
      * {@code TokenStore.listActive()}、{@code ActiveSession}，以及同样在 0.2.0 内新增的
      * {@code TokenStore.issueWithRefresh()/refresh()/revokeRefreshToken()}（access/refresh
-     * 双令牌）与 {@code CacheProvider.keysWithPrefix()}（登录锁定可观测性）。
+     * 双令牌）与 {@code CacheProvider.keysWithPrefix()}（登录锁定可观测性）；
+     * 0.2.2 引入的 {@code LockOperations}（本插件提供其 Redis 实现）。
      */
-    public static final String REQUIRED_FRAMEWORK_VERSION = "0.2.0";
+    public static final String REQUIRED_FRAMEWORK_VERSION = "0.2.2";
 
     public FrameworkCacheRedisAutoConfiguration() {
         // 放在构造函数里：条件都满足、真的要装配本插件时才检查。
@@ -93,6 +101,24 @@ public class FrameworkCacheRedisAutoConfiguration {
         return new RedisCacheProvider(redisTemplate,
                 objectMapper.getIfAvailable(ObjectMapper::new),
                 properties.getKeyPrefix());
+    }
+
+    /**
+     * 用 Redis 承载 {@link LockOperations}——引入本插件即从进程内锁升级为分布式锁，
+     * {@code @DistributedLock} 与 {@code UniqueGuard} 的行为随之在所有实例间生效。
+     *
+     * <p>键前缀取框架的 {@code describeadmin.lock.key-prefix}
+     * （{@link FrameworkLockProperties}），不取本插件自己的 key-prefix：
+     * 两个实现必须在同一配置下产出相同键名，理由见 {@link RedisLockOperations}。
+     */
+    @Bean
+    @ConditionalOnBean(StringRedisTemplate.class)
+    @ConditionalOnMissingBean(LockOperations.class)
+    public LockOperations redisLockOperations(StringRedisTemplate redisTemplate,
+                                              FrameworkLockProperties lockProperties) {
+        log.info("锁实现: RedisLockOperations（Redis 分布式锁），默认策略: {}，键前缀: {}",
+                lockProperties.getDefaultStrategy(), lockProperties.getKeyPrefix());
+        return new RedisLockOperations(redisTemplate, lockProperties.getKeyPrefix());
     }
 
     /**

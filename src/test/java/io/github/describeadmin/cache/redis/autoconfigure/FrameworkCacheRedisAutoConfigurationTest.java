@@ -1,10 +1,12 @@
 package io.github.describeadmin.cache.redis.autoconfigure;
 
 import io.github.describeadmin.cache.api.CacheProvider;
+import io.github.describeadmin.cache.api.LockOperations;
 import io.github.describeadmin.cache.autoconfigure.FrameworkCacheAutoConfiguration;
 import io.github.describeadmin.cache.core.InMemoryCacheProvider;
 import io.github.describeadmin.cache.redis.AbstractRedisTest;
 import io.github.describeadmin.cache.redis.core.RedisCacheProvider;
+import io.github.describeadmin.cache.redis.core.RedisLockOperations;
 import io.github.describeadmin.cache.redis.core.RedisTokenStore;
 import io.github.describeadmin.common.api.FrameworkVersion;
 import io.github.describeadmin.security.api.TokenStore;
@@ -15,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
@@ -87,6 +90,37 @@ class FrameworkCacheRedisAutoConfigurationTest extends AbstractRedisTest {
         runner.run(context -> {
             assertThat(context).hasSingleBean(TokenStore.class);
             assertThat(context.getBean(TokenStore.class)).isInstanceOf(RedisTokenStore.class);
+        });
+    }
+
+    @Test
+    @DisplayName("插件在 classpath 上时接管 LockOperations，@DistributedLock 随之升级为分布式锁")
+    void pluginTakesOverLockOperations() {
+        runner.run(context -> {
+            assertThat(context).hasSingleBean(LockOperations.class);
+            assertThat(context.getBean(LockOperations.class))
+                    .as("装配顺序不对时这里会是 InMemoryLockOperations，且不会有任何报错")
+                    .isInstanceOf(RedisLockOperations.class);
+        });
+    }
+
+    @Test
+    @DisplayName("锁键前缀取框架配置 describeadmin.lock.key-prefix，与内存实现产出相同键名")
+    void lockPrefixComesFromFrameworkLockProperties() {
+        runner.withPropertyValues("describeadmin.lock.key-prefix=app2:lock:").run(context -> {
+            assertThat(context.getBean(LockOperations.class)).isInstanceOf(RedisLockOperations.class);
+            StringRedisTemplate redisTemplate = context.getBean(StringRedisTemplate.class);
+            LockOperations lockOperations = context.getBean(LockOperations.class);
+
+            java.util.Optional<io.github.describeadmin.cache.api.LockHandle> handle =
+                    lockOperations.tryLock("probe", java.time.Duration.ofSeconds(10));
+            assertThat(handle).isPresent();
+            // 探针：键必须带 app2:lock: 前缀落在 Redis 上，且不叠加插件自己的 keyPrefix
+            assertThat(redisTemplate.hasKey("app2:lock:probe")).isTrue();
+            assertThat(redisTemplate.hasKey("describeadmin:app2:lock:probe"))
+                    .as("插件自己的 describeadmin: 前缀不应叠加到锁键上")
+                    .isFalse();
+            handle.get().close();
         });
     }
 
