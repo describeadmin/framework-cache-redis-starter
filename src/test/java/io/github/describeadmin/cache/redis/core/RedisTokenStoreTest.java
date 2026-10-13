@@ -177,6 +177,19 @@ class RedisTokenStoreTest extends AbstractRedisTest {
     }
 
     @Test
+    @DisplayName("在线会话的 sessionId 由令牌派生（去掉键前缀后摘要），不等于令牌本身")
+    void sessionIdIsDerivedFromToken() {
+        String a = store.issue(user(1L, "admin", "超级管理员"));
+        String b = store.issue(user(1L, "admin", "超级管理员"));
+
+        // 在线用户页按 ActiveSession.sessionIdOf(请求令牌) 标「当前」：这里算错一位就一条都标不出
+        assertThat(store.listActive())
+                .extracting(ActiveSession::getSessionId)
+                .containsExactlyInAnyOrder(ActiveSession.sessionIdOf(a), ActiveSession.sessionIdOf(b))
+                .doesNotContain(a, b);
+    }
+
+    @Test
     @DisplayName("登出的会话从在线列表中消失")
     void revokedSessionNotListed() {
         String token = store.issue(user(1L, "admin", "超级管理员"));

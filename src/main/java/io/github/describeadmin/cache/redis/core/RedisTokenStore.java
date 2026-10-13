@@ -241,10 +241,14 @@ public class RedisTokenStore implements TokenStore {
                 .count(SCAN_BATCH)
                 .build();
         try (Cursor<String> cursor = redis.scan(options)) {
+            String keyHead = keyPrefix + SESSION;
             while (cursor.hasNext()) {
-                String json = redis.opsForValue().get(cursor.next());
+                String key = cursor.next();
+                String json = redis.opsForValue().get(key);
+                // 会话标识由键里的令牌派生（单向摘要），令牌本身不出这个方法
+                String sessionId = ActiveSession.sessionIdOf(key.substring(keyHead.length()));
                 // 边扫边读，键可能刚好在两步之间过期，读到 null 属正常
-                read(json).map(StoredSession::toActiveSession).ifPresent(sessions::add);
+                read(json).map(s -> s.toActiveSession(sessionId)).ifPresent(sessions::add);
             }
         }
         sessions.sort(Comparator.comparing(ActiveSession::getIssuedAt).reversed());
@@ -336,8 +340,8 @@ public class RedisTokenStore implements TokenStore {
                     deptId, dataScope, customDeptIds, homePath, pwdResetRequired);
         }
 
-        ActiveSession toActiveSession() {
-            return new ActiveSession(userId, username, nickname, authType,
+        ActiveSession toActiveSession(String sessionId) {
+            return new ActiveSession(sessionId, userId, username, nickname, authType,
                     Instant.ofEpochMilli(issuedAtEpochMilli),
                     Instant.ofEpochMilli(expiresAtEpochMilli),
                     ip, device);
