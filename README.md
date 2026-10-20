@@ -22,8 +22,7 @@ describeadmin 的**可选插件**：把 `CacheProvider`、`TokenStore` 与 `Lock
 | 插件版本 | 最低框架版本 | 说明 |
 |---|---|---|
 | 0.2.0 | **0.2.0** | 用到 0.2.0 引入的 `TokenStore.listActive()` 与 `ActiveSession` |
-| 0.2.1 | **0.2.0** | 修复 `RedisTokenStore` 丢失数据权限字段导致的越权，见 CHANGELOG |
-| 0.2.2 | **0.2.2** | 新增 `RedisLockOperations`（`LockOperations` 的 Redis 实现），用到 0.2.2 引入的锁 SPI |
+| 1.0.0 | **1.0.0** | 第一个正式版。新增 `RedisLockOperations`（`LockOperations` 的 Redis 实现，锁 SPI 随框架 1.0.0 引入）；含原 0.2.1 的越权修复（0.2.1 未发布） |
 
 这张表不是文档承诺，是**可执行的**：
 
@@ -31,9 +30,9 @@ describeadmin 的**可选插件**：把 `CacheProvider`、`TokenStore` 与 `Lock
   而不是等到管理员点开"在线用户"那一刻才 `NoClassDefFoundError`
 - CI 对表中每个框架版本各跑一遍完整测试（见 `.github/workflows/ci.yml`）
 
-> ⚠️ **0.x 期间请逐版本核对**。SemVer 对 `0.x` 不作任何保证，本项目的 0.2.0 就带过
-> Breaking Change。框架比插件构建时更新且主版本相同时，插件只记一条 WARN 而不阻断——
-> 那条 WARN 要当回事。
+> ⚠️ **0.x 与 1.x 不互通**。1.0.0 是第一个正式版，0.x 按测试版对待、不做兼容；
+> 框架与插件主版本不同时，插件在启动时直接拒绝（`FrameworkVersion.requireCompatible`）。
+> 1.x 内框架比插件构建时更新时只记一条 WARN、不阻断。
 
 ## 接入
 
@@ -41,7 +40,7 @@ describeadmin 的**可选插件**：把 `CacheProvider`、`TokenStore` 与 `Lock
 <dependency>
   <groupId>io.github.describeadmin</groupId>
   <artifactId>framework-cache-redis-starter</artifactId>
-  <version>0.2.2</version>
+  <version>1.0.0</version>
 </dependency>
 ```
 
@@ -81,11 +80,11 @@ describeadmin:
 ## 开发
 
 ```bash
-# 框架尚未发布 0.2.2 时，先从框架仓装一份到本地仓库
+# 框架尚未发布到 Central 的版本，先从框架仓装一份到本地仓库
 mvn -f ../framework/pom.xml clean install -DskipTests
 
 mvn clean test                                # 需要 Docker：测试用真实 Redis
-mvn clean test -Ddescribeadmin.version=0.2.2  # 指定框架版本跑，即 CI 矩阵做的事
+mvn clean test -Ddescribeadmin.version=1.0.0  # 指定框架版本跑，即 CI 矩阵做的事
 ```
 
 构建**不要求特定的 JDK 版本**，唯一前提是 **JDK >= 17**（由 enforcer 的 `requireJavaVersion`

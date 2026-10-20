@@ -65,13 +65,14 @@ public class FrameworkCacheRedisAutoConfiguration {
      * 让它成为一个需要有意识修改的常量，比让它跟着别的东西自动变要安全。
      *
      * <p>用到框架新增的 SPI 时必须同步上调，否则装到旧框架上会在<b>运行期</b>
-     * 抛 NoSuchMethodError，而不是在启动时被挡住。本插件用到了 0.2.0 引入的
-     * {@code TokenStore.listActive()}、{@code ActiveSession}，以及同样在 0.2.0 内新增的
+     * 抛 NoSuchMethodError，而不是在启动时被挡住。1.0.0 是第一个正式版（0.x 按测试版对待，
+     * 不做兼容）。本插件用到了
+     * {@code TokenStore.listActive()}、{@code ActiveSession}，以及
      * {@code TokenStore.issueWithRefresh()/refresh()/revokeRefreshToken()}（access/refresh
      * 双令牌）与 {@code CacheProvider.keysWithPrefix()}（登录锁定可观测性）；
-     * 0.2.2 引入的 {@code LockOperations}（本插件提供其 Redis 实现）。
+     * 随 1.0.0 引入的 {@code LockOperations}（本插件提供其 Redis 实现）。
      */
-    public static final String REQUIRED_FRAMEWORK_VERSION = "0.2.2";
+    public static final String REQUIRED_FRAMEWORK_VERSION = "1.0.0";
 
     public FrameworkCacheRedisAutoConfiguration() {
         // 放在构造函数里：条件都满足、真的要装配本插件时才检查。

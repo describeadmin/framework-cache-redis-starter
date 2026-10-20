@@ -4,7 +4,7 @@
 #
 # 框架仓只需证明"自己这一版是好的"——它的模块彼此同版本发布，不存在版本组合问题。
 # 插件不同：它以 provided 依赖框架，**运行时的框架版本由业务方决定**，
-# 不是插件构建时那个。只在一个框架版本上跑绿，等于对"支持 0.2.0+"这句话没有任何证据。
+# 不是插件构建时那个。只在一个框架版本上跑绿，等于对"支持 1.0.0+"这句话没有任何证据。
 #
 # 因此下面的 compat 作业按【框架版本矩阵】跑完整测试，矩阵靠覆盖 POM 的
 # describeadmin.version 属性实现。见 docs 仓 registry.md 准入规范第 4、5 条。
@@ -28,13 +28,13 @@ jobs:
         # ⚠️ 新增框架版本时，这里、README 的兼容性表格、registry.md 的表格要一起改。
         #    只改一处的话，声明与验证就脱节了，而脱节的那一刻不会有任何报错。
         #
-        # 下限固定为 REQUIRED_FRAMEWORK_VERSION（当前 0.2.2——本插件的
-        # RedisLockOperations 实现的是 0.2.2 才引入的 LockOperations SPI）。
+        # 下限固定为 REQUIRED_FRAMEWORK_VERSION（当前 1.0.0——第一个正式版，0.x 不做兼容；
+        # 本插件的 RedisLockOperations 实现的 LockOperations SPI 也是随 1.0.0 引入的）。
         # 比它更低的版本连编译都过不去，那正是预期行为，不必也不应放进矩阵。
         #
         # 这个下限跟着 REQUIRED_FRAMEWORK_VERSION 走：常量升上去而矩阵留在旧版本，
         # 唯一那条腿会直接编译失败，兼容性门禁就成了摆设。
-        framework: ['0.2.2']
+        framework: ['1.0.0']
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +46,7 @@ jobs:
 
       # Central 上还没有的版本必须从框架仓源码装一份到本地仓库：SNAPSHOT 是一种，
       # "框架已经打好这一版但尚未发布到 Central"是另一种——插件的下限版本总是先于
-      # 框架发布就被提上来（本仓的 0.2.2 就是这个处境），矩阵不能因此红着等。
+      # 框架发布就被提上来（1.0.0 首发时各插件都是这个处境），矩阵不能因此红着等。
       # 已发布的版本直接从 Central 解析，不走这一步——那才是业务方的真实处境。
       #
       # 判定用 repo1 直查而不是 dependency:get：后者会命中 actions/cache 恢复出来的
