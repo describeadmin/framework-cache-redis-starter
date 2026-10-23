@@ -80,7 +80,7 @@
       那个常量是运行期自检读的，这个属性是构建期解析用的，两者说的是同一件事。
       CI 的兼容性矩阵靠覆盖本属性来跑：
           mvn -B test -Ddescribeadmin.version=0.3.0
-      见 .github/workflows/ci.yml 与 docs/registry.md 准入规范第 4、5 条。
+      见 .github/workflows/ci.yml 与 docs/site/dev/plugin-dev.md 第 4、5 条。
 
       注意插件自身的版本号（上面的 <version>）与它【不联动】：
       插件发 1.3.0 完全可能仍然只要求框架 1.0.0。
@@ -294,7 +294,7 @@
       发布 profile。与 framework 仓的同名 profile 保持一致，需要：
         1. Central Portal User Token  → settings.xml 的 <server id="central">
         2. GPG 密钥
-      发布步骤一律参照 docs 仓的 RELEASE.md，不要凭记忆执行。
+      发布步骤一律参照 docs/site/dev/release.md，不要凭记忆执行。
     -->
     <profile>
       <id>release</id>

@@ -7,7 +7,7 @@
 # 不是插件构建时那个。只在一个框架版本上跑绿，等于对"支持 1.0.0+"这句话没有任何证据。
 #
 # 因此下面的 compat 作业按【框架版本矩阵】跑完整测试，矩阵靠覆盖 POM 的
-# describeadmin.version 属性实现。见 docs 仓 registry.md 准入规范第 4、5 条。
+# describeadmin.version 属性实现。见 docs/site/dev/plugin-dev.md 第 4、5 条。
 
 name: CI
 
@@ -25,7 +25,7 @@ jobs:
       # 一个版本挂掉时，其余版本的结果仍然有价值——"从哪个版本开始坏的"正是要看的信息
       fail-fast: false
       matrix:
-        # ⚠️ 新增框架版本时，这里、README 的兼容性表格、registry.md 的表格要一起改。
+        # ⚠️ 新增框架版本时，这里、README 的兼容性表格、docs/site/reference/plugins.md 的表格要一起改。
         #    只改一处的话，声明与验证就脱节了，而脱节的那一刻不会有任何报错。
         #
         # 下限固定为 REQUIRED_FRAMEWORK_VERSION（当前 1.0.0——第一个正式版，0.x 不做兼容；

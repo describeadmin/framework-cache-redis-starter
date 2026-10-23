@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * {@code @ConditionalOnMissingBean} 提供内存兜底，而该条件只看当前已注册的 Bean 定义。
  * 插件若晚于核心被评估，插件的 Bean 会被自己的条件挡掉——<b>启动完全正常、日志毫无异常</b>，
  * 直到某次重启后发现用户还是全掉线了，才会有人怀疑到装配顺序。
- * VERSION_BASELINE.md 发现 ⑦ 记录过同一类问题，当时是在 core 内部两个 starter 之间发生的。
+ * docs/site/dev/pitfalls.md ⑦ 记录过同一类问题，当时是在 core 内部两个 starter 之间发生的。
  *
  * <p>{@link AutoConfigurations} 会按 {@code @AutoConfiguration} 的 before/after 真实排序，
  * 因此本测试验证的确实是那几个注解，而不只是 Bean 方法本身。

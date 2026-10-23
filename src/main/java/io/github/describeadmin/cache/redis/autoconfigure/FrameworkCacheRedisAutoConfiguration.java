@@ -33,7 +33,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
  * <b>只检查当前已注册的 Bean 定义</b>：本插件若晚于核心被评估，核心的内存实现已经注册，
  * 插件的 Bean 就会被自己的 {@code @ConditionalOnMissingBean} 挡掉——
  * 结果是<b>引了插件却完全没生效，且启动毫无异常</b>，直到重启后发现用户还是全掉线了
- * 才会有人怀疑到这里。VERSION_BASELINE.md 发现 ⑦ 记录过同一类问题。
+ * 才会有人怀疑到这里。docs/site/dev/pitfalls.md ⑦ 记录过同一类问题。
  *
  * <p>因此本类声明 {@code before}：
  * <ul>
